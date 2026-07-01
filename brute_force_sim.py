@@ -189,37 +189,39 @@ def run_demo(length=6, alphabet=string.ascii_lowercase[:6]):
     space_size = base ** length
     n_qubits = math.ceil(math.log2(space_size))
     padded_space = 2 ** n_qubits
-
+ 
     password = "".join(random.choice(alphabet) for _ in range(length))
     password_index = string_to_index(password, alphabet)
     password_bits = index_to_bitstring(password_index, n_qubits)
-
+ 
     print("=" * 70)
     print(f"PASSWORD TO CRACK: '{password}'")
     print(f"Alphabet: '{alphabet}' ({base} symbols) | Length: {length}")
     print(f"Search space size: {space_size} combinations "
           f"(padded to {padded_space} = 2^{n_qubits} for {n_qubits} qubits)")
     print("=" * 70)
-
+ 
     # Normal
     print("\n[1] Running brute-force search...")
     found, guesses, c_time = brute_force(password, alphabet, length)
     print(f"    Found: '{found}'")
     print(f"    Guesses needed: {guesses} (out of {space_size} possible)")
     print(f"    Time: {c_time*1000:.3f} ms")
-
+ 
     # Quantum
     print("\n[2] Running quantum simulator...")
     q_result_bits, q_iterations, q_time, confidence = quantum_grover_search(
         n_qubits, password_bits
     )
     q_result_str = bitstring_to_string(q_result_bits, alphabet, length)
-    print(f"    Found: '{q_result_str}' (confidence: {confidence*100:.1f}%)")
+    success = (q_result_str == password)
+    print(f"    Found: '{q_result_str}' (confidence: {confidence*100:.1f}%, "
+          f"{'CORRECT' if success else 'WRONG'})")
     print(f"    Oracle queries (Grover iterations): {q_iterations} "
-          f"(vs {space_size} possible)")
+          f"(vs {padded_space} in the padded space it searches)")
     print(f"    Simulation time: {q_time*1000:.3f} ms "
           f"(includes overhead of simulating a quantum computer)")
-
+ 
     # Comparison summary
     print("\n" + "=" * 70)
     print("COMPARISON")
@@ -231,16 +233,18 @@ def run_demo(length=6, alphabet=string.ascii_lowercase[:6]):
     print(f"{'Query speedup factor':<35}{'1x':<18}{f'{speedup:.1f}x':<18}")
     print(f"{'Time (this machine)':<35}{f'{c_time*1000:.3f} ms':<18}"
           f"{f'{q_time*1000:.3f} ms':<18}")
-
+ 
     return {
         "password": password,
         "space_size": space_size,
+        "padded_space": padded_space,
         "n_qubits": n_qubits,
         "bf_guesses": guesses,
         "bf_time": c_time,
         "quantum_iterations": q_iterations,
         "quantum_time": q_time,
         "quantum_confidence": confidence,
+        "quantum_success": success,
     }
 
 def run_multiple(n_runs=100, length=6, alphabet=string.ascii_lowercase[:6]):
@@ -257,38 +261,58 @@ def run_multiple(n_runs=100, length=6, alphabet=string.ascii_lowercase[:6]):
 import numpy as np
 
 def print_results(results):
-    bf = [r["bf_guesses"]  for r in results]
+    bf        = [r["bf_guesses"]         for r in results]
     quantum   = [r["quantum_iterations"] for r in results]
-    space     = results[0]["space_size"]
-    n_qubits  = results[0]["n_qubits"]
-
+    conf      = [r["quantum_confidence"] for r in results]
+    success   = [r["quantum_success"]    for r in results]
+ 
+    real_space   = results[0]["space_size"]
+    padded_space = results[0]["padded_space"]
+    n_qubits     = results[0]["n_qubits"]
+    n_runs       = len(results)
+ 
+    # Measure how brute force varies
     avg_c = np.mean(bf)
-    avg_q = np.mean(quantum)
     std_c = np.std(bf)
-    std_q = np.std(quantum)
-
-    theoretical_c = space / 2
-    theoretical_q = (math.pi / 4) * math.sqrt(2 ** n_qubits)
-    speedup = avg_c / avg_q if avg_q else float("inf")
-
+    theoretical_c = (real_space + 1) / 2        
+ 
+    # Grover's query count is fixed but measurement quality varies.
+    q_queries = quantum[0]
+    q_is_constant = (len(set(quantum)) == 1)
+    theoretical_q = (math.pi / 4) * math.sqrt(padded_space)  # padded space
+ 
+    success_rate = np.mean(success) * 100
+    avg_conf     = np.mean(conf) * 100
+ 
+    speedup = avg_c / q_queries if q_queries else float("inf")
+ 
     print("\n" + "=" * 70)
     print("SIMULATION SUMMARY")
     print("=" * 70)
-    print(f"Runs: {len(results)}  |  Search space: {space}  |  Qubits: {n_qubits}")
+    print(f"Runs: {n_runs}  |  Real space: {real_space}  |  "
+          f"Padded space: {padded_space} (2^{n_qubits})")
     print("-" * 70)
-    print(f"{'Metric':<35}{'Brute Force':<18}{'Quantum':<18}")
+    print(f"{'Metric':<32}{'Brute Force':<19}{'Quantum (Grover)':<19}")
     print("-" * 70)
-    print(f"{'Average queries':<35}{avg_c:<18.1f}{avg_q:<18.1f}")
-    print(f"{'Std deviation':<35}{std_c:<18.1f}{std_q:<18.1f}")
-    print(f"{'Theoretical average':<35}{theoretical_c:<18.1f}{theoretical_q:<18.1f}")
+    print(f"{'Search space':<32}{real_space:<19}{padded_space:<19}")
+    print(f"{'Queries (measured)':<32}"
+          f"{f'{avg_c:.1f}':<19}"
+          f"{f'{q_queries} (fixed)':<19}")
+    print(f"{'Queries (theoretical)':<32}"
+          f"{f'{theoretical_c:.1f}':<19}{f'{theoretical_q:.1f}':<19}")
     print("-" * 70)
-    print(f"Average query speedup: {speedup:.1f}x")
+    print(f"Grover success rate (top result correct): {success_rate:.1f}%")
+    print(f"Grover mean confidence:                   {avg_conf:.1f}%")
+    if not q_is_constant:
+        print("WARNING: Grover query count varied across runs (unexpected).")
+    print("-" * 70)
+    print(f"Query speedup (brute force avg / Grover): {speedup:.1f}x")
     print("=" * 70)
 
 
 
 # Main
 if __name__ == "__main__":
-    N_RUNS = 100
+    N_RUNS = 50
     results = run_multiple(n_runs=N_RUNS, length=6, alphabet=string.ascii_lowercase[:6])
     print_results(results)
